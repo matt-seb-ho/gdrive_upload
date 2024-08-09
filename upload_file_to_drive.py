@@ -2,17 +2,36 @@ import argparse
 import os
 from pathlib import Path
 
+# from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.auth.transport.requests import Request
 
+# SERVICE_ACCT_GDRIVE_PATH_PREFIX = "service_acct_accessible/"
 # If modifying these SCOPES, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 
-def authenticate():
+def authenticate(credential_file_path):
+    """
+    Uses credential file to authenticate with Google Drive API.
+
+    There are two ways to authenticate:
+    1. Service Account File 
+      - recommended for server-side applications
+      - especially useful for automation without user interaction
+    2. OAuth2 Client ID
+      - requires signing into in the browser and passing a consent screen
+    """
+
+    # NOTE: service account method is currently broken!
+    # creds = service_account.Credentials.from_service_account_file(
+    #     credential_file_path, 
+    #     scopes=SCOPES
+    # )
+
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
@@ -21,11 +40,13 @@ def authenticate():
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES
+                credential_file_path,
+                SCOPES
             )
             creds = flow.run_local_server(port=0)
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
+
     return creds
 
 
@@ -71,8 +92,8 @@ def traverse_and_create_folders(service, path):
     return parent_id
 
 
-def upload_file_to_drive(file_path, destination_path):
-    creds = authenticate()
+def upload_file_to_drive(file_path, destination_path, credential_file):
+    creds = authenticate(credential_file)
     service = build('drive', 'v3', credentials=creds)
     
     # Traverse or create folders
@@ -100,8 +121,20 @@ def upload_file_to_drive(file_path, destination_path):
 
 if __name__ == "__main__":
     psr = argparse.ArgumentParser()
-    psr.add_argument('file_path', type=str, help='Path to the file to upload')
-    psr.add_argument('destination_path', type=str, help='Destination path in Google Drive')
+    psr.add_argument("file_path", type=str, help="Path to the file to upload")
+    psr.add_argument("destination_path", type=str, help="Destination path in Google Drive")
+    psr.add_argument(
+        "--credential_file", "-c",
+        type=str,
+        default="credentials.json",
+        help="Path to the credential file"
+    )
+    # NOTE: service account method is currently broken!
+    # psr.add_argument("--use_client_id", action="store_true", help="Use OAuth2 Client ID for authentication instead of Service Account")
     args = psr.parse_args()
 
-    upload_file_to_drive(args.file_path, args.destination_path)
+    upload_file_to_drive(
+        args.file_path, 
+        args.destination_path,
+        args.credential_file,
+    )
