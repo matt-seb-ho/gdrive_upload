@@ -62,7 +62,8 @@ class GoogleDriveUploader:
     @staticmethod
     def get_folder_id(service, folder_name, parent_folder_id=None):
         # Search for the folder in the current parent directory
-        query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'"
+        # query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'"
+        query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         if parent_folder_id:
             query += f" and '{parent_folder_id}' in parents"
         
@@ -115,14 +116,10 @@ class GoogleDriveUploader:
     def upload_file(cls, file_path, destination_path, credential_file):
         creds = cls.authenticate(credential_file)
         service = build('drive', 'v3', credentials=creds)
-
-        print("got credentials and initialized service")
         
         # Traverse or create folders
         parent_folder_id = cls.traverse_and_create_folders(service, destination_path)
 
-        print("traversed and created folders")
-        
         # Extract the file name from the destination path
         file_name = destination_path.split('/')[-1]
         
@@ -131,8 +128,6 @@ class GoogleDriveUploader:
         if parent_folder_id:
             file_metadata['parents'] = [parent_folder_id]
         
-        print("uploading file with metadata", file_metadata)
-
         media = MediaFileUpload(file_path, resumable=True)
 
         file = service.files().create(
@@ -158,8 +153,6 @@ if __name__ == "__main__":
     # NOTE: service account method is currently broken!
     # psr.add_argument("--use_client_id", action="store_true", help="Use OAuth2 Client ID for authentication instead of Service Account")
     args = psr.parse_args()
-
-    print(args)
 
     file_id = GoogleDriveUploader.upload_file(
         args.file_path, 
