@@ -23,7 +23,7 @@ pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-pyt
 8. Create the OAuth 2.0 client ID, and choose "Desktop app" as the application type.
 9. Download the JSON file with your credentials. Rename it to `credentials.json` and place it in your working directory.
 
-#### (Optional) Step 2a: Set up a Service Account
+#### (Currently Broken) (TODO: Fix) Step 2a: Set up a Service Account
 1. **Create a Service Account:**
    - Go to the [Google Cloud Console](https://console.cloud.google.com/).
    - Navigate to **IAM & Admin > Service Accounts**.

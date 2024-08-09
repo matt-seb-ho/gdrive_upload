@@ -1,6 +1,6 @@
 import argparse
 import os
-from pathlib import Path
+from functools import cache
 
 # from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
@@ -14,109 +14,135 @@ from google.auth.transport.requests import Request
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 
-def authenticate(credential_file_path):
-    """
-    Uses credential file to authenticate with Google Drive API.
+class GoogleDriveUploader:
+    # class variables
+    folder_id_cache = {}
+    credentials = None
 
-    There are two ways to authenticate:
-    1. Service Account File 
-      - recommended for server-side applications
-      - especially useful for automation without user interaction
-    2. OAuth2 Client ID
-      - requires signing into in the browser and passing a consent screen
-    """
+    @classmethod
+    def authenticate(cls, credential_file_path):
+        """
+        Uses credential file to authenticate with Google Drive API.
 
-    # NOTE: service account method is currently broken!
-    # creds = service_account.Credentials.from_service_account_file(
-    #     credential_file_path, 
-    #     scopes=SCOPES
-    # )
+        There are two ways to authenticate:
+        1. Service Account File 
+        - recommended for server-side applications
+        - especially useful for automation without user interaction
+        2. OAuth2 Client ID
+        - requires signing into in the browser and passing a consent screen
+        """
 
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                credential_file_path,
-                SCOPES
-            )
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+        # NOTE: service account method is currently broken!
+        # creds = service_account.Credentials.from_service_account_file(
+        #     credential_file_path, 
+        #     scopes=SCOPES
+        # )
+        if cls.credentials:
+            return cls.credentials
 
-    return creds
+        creds = None
+        if os.path.exists('token.json'):
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    credential_file_path,
+                    SCOPES
+                )
+                creds = flow.run_local_server(port=0)
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+
+        cls.credentials = creds
+        return creds
 
 
-def get_folder_id(service, folder_name, parent_folder_id=None):
-    # Search for the folder in the current parent directory
-    query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'"
-    if parent_folder_id:
-        query += f" and '{parent_folder_id}' in parents"
-    
-    results = service.files().list(
-        q=query,
-        spaces='drive',
-        fields="files(id, name)",
-        pageSize=10
-    ).execute()
-
-    items = results.get('files', [])
-    if items:
-        # If the folder exists, return its ID
-        return items[0]['id']
-    else:
-        # If the folder doesn't exist, create it
-        folder_metadata = {
-            'name': folder_name,
-            'mimeType': 'application/vnd.google-apps.folder'
-        }
+    @staticmethod
+    def get_folder_id(service, folder_name, parent_folder_id=None):
+        # Search for the folder in the current parent directory
+        query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'"
         if parent_folder_id:
-            folder_metadata['parents'] = [parent_folder_id]
-        folder = service.files().create(
-            body=folder_metadata,
+            query += f" and '{parent_folder_id}' in parents"
+        
+        results = service.files().list(
+            q=query,
+            spaces='drive',
+            fields="files(id, name)",
+            pageSize=10
+        ).execute()
+
+        items = results.get('files', [])
+        if items:
+            # If the folder exists, return its ID
+            return items[0]['id']
+        else:
+            # If the folder doesn't exist, create it
+            folder_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            if parent_folder_id:
+                folder_metadata['parents'] = [parent_folder_id]
+            folder = service.files().create(
+                body=folder_metadata,
+                fields='id'
+            ).execute()
+            return folder['id']
+
+
+    @classmethod
+    def traverse_and_create_folders(cls, service, path):
+        # exclude the file name
+        folders = path.split('/')[:-1]
+        parent_id = None
+        cache_dict = cls.folder_id_cache
+        for folder in folders:  
+            if folder in cache_dict:
+                parent_id = cache_dict[folder]["id"]
+            else:
+                parent_id = cls.get_folder_id(service, folder, parent_id)
+                cache_dict[folder] = {
+                    "id": parent_id,
+                    "children": {},
+                }
+                cache_dict = cache_dict[folder]["children"]
+        return parent_id
+
+
+    @classmethod
+    def upload_file(cls, file_path, destination_path, credential_file):
+        creds = cls.authenticate(credential_file)
+        service = build('drive', 'v3', credentials=creds)
+
+        print("got credentials and initialized service")
+        
+        # Traverse or create folders
+        parent_folder_id = cls.traverse_and_create_folders(service, destination_path)
+
+        print("traversed and created folders")
+        
+        # Extract the file name from the destination path
+        file_name = destination_path.split('/')[-1]
+        
+        # Upload the file
+        file_metadata = {'name': file_name}
+        if parent_folder_id:
+            file_metadata['parents'] = [parent_folder_id]
+        
+        print("uploading file with metadata", file_metadata)
+
+        media = MediaFileUpload(file_path, resumable=True)
+
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
             fields='id'
         ).execute()
-        return folder['id']
 
-
-def traverse_and_create_folders(service, path):
-    folders = path.split('/')
-    parent_id = None
-
-    for folder in folders[:-1]:  # Exclude the last part (the file name)
-        parent_id = get_folder_id(service, folder, parent_id)
-
-    return parent_id
-
-
-def upload_file_to_drive(file_path, destination_path, credential_file):
-    creds = authenticate(credential_file)
-    service = build('drive', 'v3', credentials=creds)
-    
-    # Traverse or create folders
-    parent_folder_id = traverse_and_create_folders(service, destination_path)
-    
-    # Extract the file name from the destination path
-    file_name = destination_path.split('/')[-1]
-    
-    # Upload the file
-    file_metadata = {'name': file_name}
-    if parent_folder_id:
-        file_metadata['parents'] = [parent_folder_id]
-
-    media = MediaFileUpload(file_path, resumable=True)
-
-    file = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id'
-    ).execute()
-
-    file_id = file.get('id')
-    return file_id
+        file_id = file.get('id')
+        return file_id
 
 
 if __name__ == "__main__":
@@ -133,8 +159,12 @@ if __name__ == "__main__":
     # psr.add_argument("--use_client_id", action="store_true", help="Use OAuth2 Client ID for authentication instead of Service Account")
     args = psr.parse_args()
 
-    upload_file_to_drive(
+    print(args)
+
+    file_id = GoogleDriveUploader.upload_file(
         args.file_path, 
         args.destination_path,
         args.credential_file,
     )
+
+    print(f"File uploaded with ID: {file_id}")
